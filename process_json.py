@@ -50,16 +50,16 @@ def create_database():
         # Creates a table containing the patient's forms of identification, as each patient has many forms of identification
         db_cursor.execute("CREATE TABLE patient_identification ("
             "patient_identification_id INT AUTO_INCREMENT PRIMARY KEY, patient INT, "
-            "id_system VARCHAR(255), "
             "type VARCHAR(255), "
             "value VARCHAR(255), "
             "FOREIGN KEY(patient) REFERENCES patient(patient_id))")
 
-        # Creates a table containing all the event data for each patient. Currently just stores most event data as a longtext, ideally will try to separate that out in future
-        db_cursor.execute("CREATE TABLE patient_event ("
-            "patient_event_id INT AUTO_INCREMENT PRIMARY KEY, patient INT, "
-            "event_type VARCHAR(255), "
-            "event_data LONGTEXT, "
+        # Creates a table containing all the encounter data for each patient. Currently just stores most encounter data as a longtext, ideally will try to separate that out in future
+        db_cursor.execute("CREATE TABLE patient_encounter ("
+            "patient_encounter_id INT AUTO_INCREMENT PRIMARY KEY, patient INT, "
+            "encounter_type VARCHAR(255), "
+            "encounter_subtype VARCHAR(255), "
+            "encounter_data LONGTEXT, "
             "FOREIGN KEY(patient) REFERENCES patient(patient_id))")
         
         new_con.close()
@@ -69,7 +69,7 @@ def add_patient(patient_data):
     con = connect_to_database("patient_data")
     db_cursor = con.cursor()
 
-    # Sets the more complex data points to variables to reduce SQL complexity
+    # Sets the data points to variables to reduce SQL complexity
     first_name = patient_data['name'][0]['given'][0]
     surname = patient_data['name'][0]['family']
     try:
@@ -103,6 +103,7 @@ def add_patient(patient_data):
     phone_number = patient_data['telecom'][0]['value']
     language = patient_data['communication'][0]['language']['text']
 
+    # Insert the patient data into the patient table
     db_cursor.execute("INSERT INTO patient (uuid, "
     "first_name, surname, prefix, "
     "gender, birth_sex, birth_date, "
@@ -119,7 +120,47 @@ def add_patient(patient_data):
         ethnicity, race, mother_maiden, marital_status, 
         phone_number, language, 
         death_datetime])
-    return "temp"
+    con.commit()
+    # Return the ID primary key for the patient whose data was just inserted
+    patient_id = db_cursor.lastrowid
+    con.close()
+    return patient_id
+
+def add_patient_identification(identification_data, patient_id):
+    con = connect_to_database("patient_data")
+    db_cursor = con.cursor()
+
+    id_type = identification_data['type']['text']
+    id_value = identification_data['value']
+
+    db_cursor.execute("INSERT INTO patient_identification (patient, type, value) VALUES (%s, %s, %s)",[
+        patient_id, id_type, id_value
+    ])
+    con.commit()
+    con.close()
+
+def add_patient_encounter(encounter_data, patient_id):
+    con = connect_to_database("patient_data")
+    db_cursor = con.cursor()
+
+    # Set data points to variables to reduce SQL complexity
+    encounter_type = encounter_data['resourceType']
+    try:
+        encounter_subtype = encounter_data['type'][0]['text']
+    except:
+        encounter_subtype = "N/A"
+    # Dump the encounter data into a single string to allow all encounters to be stored regardless of type
+    # Come back to this in future and determine a way to store this data another way, perhaps storing encounter types separately
+    encounter_data_dump = json.dumps(encounter_data).rstrip('\n')
+
+    db_cursor.execute("INSERT INTO patient_encounter (patient, encounter_type, encounter_subtype, encounter_data) VALUES (%s, %s, %s, %s)",[
+        patient_id,
+        encounter_type,
+        encounter_subtype,
+        encounter_data_dump
+    ])
+    con.commit()
+    con.close()
 
 def process_json_data(json_data, file_name):
     # Verifies that the file is using the correct format
@@ -133,12 +174,15 @@ def process_json_data(json_data, file_name):
 
         if len(db_cursor.fetchall()) == 0:
             #Send data to add_patient function, return the patient id
-            db_cursor.close()
+            con.close()
             patient_id = add_patient(patient_data)
 
+            for identification in patient_data['identifier'][1:]:
+                add_patient_identification(identification, patient_id)
+
             for entry in json_data['entry'][1:]:
-                event_data = entry['resource']
-                # add_patient_event(event_data, patient_id)
+                encounter_data = entry['resource']
+                add_patient_encounter(encounter_data, patient_id)
 
         else:
             print("Patient data already stored in database\n")
